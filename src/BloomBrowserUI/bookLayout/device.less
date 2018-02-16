@@ -85,6 +85,21 @@
         .LeaveMarginForPageNumber(@Device16x9Landscape-Height);
     }
 
+    .Device16x9Landscape.layout-style-SideBySide & {
+        .split-pane-component {
+            height: 100% !important;
+            width: 48%;
+            
+            &.position-bottom {
+                left: auto;
+                right: 0;
+            }
+        }
+        .split-pane-divider {
+            display: none;
+        }
+    }
+
     .PictureStoryLandscape & {
         .SetMarginBoxDevice(@PictureStoryLandscape-Width, @PictureStoryLandscape-Height);
 
