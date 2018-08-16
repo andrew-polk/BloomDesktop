@@ -3,12 +3,13 @@
 /// <reference path="../lib/jquery.i18n.custom.ts" />
 
 import * as $ from "jquery";
-import * as jQuery from "jquery";
 import { bootstrap } from "./js/bloomEditing";
 import { EditableDivUtils } from "./js/editableDivUtils";
 import "../lib/jquery.i18n.custom.ts"; //localize()
 import "../lib/jquery.myimgscale.js"; //scaleImage()
 import "errorHandler";
+
+import { getEditViewFrameExports } from "./js/bloomFrames";
 
 // This exports the functions that should be accessible from other IFrames or from C#.
 // For example, FrameExports.getPageFrameExports().pageSelectionChanging() can be called.
@@ -104,8 +105,21 @@ $(document).ready(() => {
         .find("*[data-i18n]")
         .localize();
     bootstrap();
+
+    var mc = document.createElement("div");
+    mc.id = "mc";
+    document.body.appendChild(mc);
+
+    // ReactDOM.render(
+    //     React.createElement(IntellectualPropertyDialog, { showCreator: false }),
+    //     document.getElementById("mc")
+    // );
 });
 
 export function SayHello() {
     alert("hello from editable page frame.");
+}
+
+export function ShowIntellectualPropertyDialog(showCreator: boolean) {
+    getEditViewFrameExports().ShowIntellectualPropertyDialog(showCreator);
 }

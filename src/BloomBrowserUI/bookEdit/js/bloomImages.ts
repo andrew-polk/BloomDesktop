@@ -171,7 +171,7 @@ function SetupImageContainer(containerDiv) {
                         theOneLocalizationManager.getText(
                             "EditTab.Image.EditMetadata"
                         ) +
-                        '"></button>'
+                        '" onClick="FrameExports.ShowIntellectualPropertyDialog(true);"></button>'
                 );
                 $this.find(".miniButton").each(function() {
                     $(this).removeClass("disabled");
@@ -334,12 +334,12 @@ function UpdateOverlay(container, img) {
             .done(translation => {
                 var title = translation.replace(/'/g, "&apos;");
                 $(container).prepend(
-                    `<button class='${buttonClasses}' title='${title}'></button>`
+                    `<button class='${buttonClasses}' title='${title}' onClick="FrameExports.ShowIntellectualPropertyDialog(true);"></button>`
                 );
             })
             .fail(() => {
                 $(container).prepend(
-                    `<button class='${buttonClasses}' title='${englishText}'></button>`
+                    `<button class='${buttonClasses}' title='${englishText}' onClick="FrameExports.ShowIntellectualPropertyDialog(true);"></button>`
                 );
             });
     }

@@ -52,7 +52,8 @@ namespace Bloom.Edit
 
 		public EditingView(EditingModel model, PageListView pageListView, CutCommand cutCommand, CopyCommand copyCommand,
 			PasteCommand pasteCommand, UndoCommand undoCommand, DuplicatePageCommand duplicatePageCommand,
-			DeletePageCommand deletePageCommand, NavigationIsolator isolator, ControlKeyEvent controlKeyEvent, SignLanguageApi signLanguageApi, CommonApi commonApi)
+			DeletePageCommand deletePageCommand, NavigationIsolator isolator, ControlKeyEvent controlKeyEvent, SignLanguageApi signLanguageApi,
+			CommonApi commonApi, CopyrightAndLicenseApi copyrightAndLicenseApi)
 		{
 			_model = model;
 			_pageListView = pageListView;
@@ -75,6 +76,7 @@ namespace Bloom.Edit
 			signLanguageApi.Model = _model;
 			signLanguageApi.View = this;
 			commonApi.Model = _model;
+			copyrightAndLicenseApi.Model = _model;
 			_browser1.SetEditingCommands(cutCommand, copyCommand, pasteCommand, undoCommand);
 
 			_browser1.GeckoReady += new EventHandler(OnGeckoReady);
@@ -343,55 +345,55 @@ namespace Bloom.Edit
 			//_browser1.WebBrowser.AddMessageEventListener("PreserveHtmlOfElement", elementHtml => _model.PreserveHtmlOfElement(elementHtml));
 		}
 
-		private void OnShowBookMetadataEditor()
-		{
-			try
-			{
-				_model.SaveNow();
-				//in case we were in this dialog already and made changes, which haven't found their way out to the Book yet
+		//private void OnShowBookMetadataEditor()
+		//{
+		//	try
+		//	{
+		//		_model.SaveNow();
+		//		//in case we were in this dialog already and made changes, which haven't found their way out to the Book yet
 
-				var metadata = _model.CurrentBook.GetLicenseMetadata();
+		//		var metadata = _model.CurrentBook.GetLicenseMetadata();
 
-				Logger.WriteEvent("Showing Metadata Editor Dialog");
-				using(var dlg = new SIL.Windows.Forms.ClearShare.WinFormsUI.MetadataEditorDialog(metadata))
-				{
-					dlg.ShowCreator = false;
-					if(DialogResult.OK == dlg.ShowDialog())
-					{
-						Logger.WriteEvent("For BL-3166 Investigation");
-						if(metadata.License == null)
-						{
-							Logger.WriteEvent("old LicenseUrl was null ");
-						}
-						else
-						{
-							Logger.WriteEvent("old LicenseUrl was " + metadata.License.Url);
-						}
-						if(dlg.Metadata.License == null)
-						{
-							Logger.WriteEvent("new LicenseUrl was null ");
-						}
-						else
-						{
-							Logger.WriteEvent("new LicenseUrl: " + dlg.Metadata.License.Url);
-						}
+		//		Logger.WriteEvent("Showing Metadata Editor Dialog");
+		//		using(var dlg = new SIL.Windows.Forms.ClearShare.WinFormsUI.MetadataEditorDialog(metadata))
+		//		{
+		//			dlg.ShowCreator = false;
+		//			if(DialogResult.OK == dlg.ShowDialog())
+		//			{
+		//				Logger.WriteEvent("For BL-3166 Investigation");
+		//				if(metadata.License == null)
+		//				{
+		//					Logger.WriteEvent("old LicenseUrl was null ");
+		//				}
+		//				else
+		//				{
+		//					Logger.WriteEvent("old LicenseUrl was " + metadata.License.Url);
+		//				}
+		//				if(dlg.Metadata.License == null)
+		//				{
+		//					Logger.WriteEvent("new LicenseUrl was null ");
+		//				}
+		//				else
+		//				{
+		//					Logger.WriteEvent("new LicenseUrl: " + dlg.Metadata.License.Url);
+		//				}
 
-						_model.ChangeBookLicenseMetaData(dlg.Metadata);
-					}
-				}
-				Logger.WriteMinorEvent("Emerged from Metadata Editor Dialog");
-			}
-			catch(Exception error)
-			{
-				// Throwing this exception is causing it to be swallowed.  It results in the web browser just showing a blank white page, but no
-				// message is displayed and no exception is caught by the debugger.
-				//#if DEBUG
-				//				throw;
-				//#endif
-				SIL.Reporting.ErrorReport.NotifyUserOfProblem(error,
-					"There was a problem recording your changes to the copyright and license.");
-			}
-		}
+		//				_model.ChangeBookLicenseMetaData(dlg.Metadata);
+		//			}
+		//		}
+		//		Logger.WriteMinorEvent("Emerged from Metadata Editor Dialog");
+		//	}
+		//	catch(Exception error)
+		//	{
+		//		// Throwing this exception is causing it to be swallowed.  It results in the web browser just showing a blank white page, but no
+		//		// message is displayed and no exception is caught by the debugger.
+		//		//#if DEBUG
+		//		//				throw;
+		//		//#endif
+		//		SIL.Reporting.ErrorReport.NotifyUserOfProblem(error,
+		//			"There was a problem recording your changes to the copyright and license.");
+		//	}
+		//}
 
 		private void SetupThumnailLists()
 		{
@@ -614,8 +616,13 @@ namespace Bloom.Edit
 				OnCutImage(ge);
 			if(target.ClassName.Contains("copyImageButton"))
 				OnCopyImage(ge);
-			if(target.ClassName.Contains("editMetadataButton"))
-				OnEditImageMetdata(ge);
+			if (target.ClassName.Contains("editMetadataButton"))
+			{
+				// now handled by a react modal
+				ge.Handled = false;
+				return;
+			}
+
 
 			var anchor = target as GeckoAnchorElement;
 			if (anchor == null)
@@ -625,13 +632,6 @@ namespace Bloom.Edit
 			}
 			if(anchor != null && anchor.Href != "" && anchor.Href != "#")
 			{
-				if(anchor.Href.Contains("bookMetadataEditor"))
-				{
-					OnShowBookMetadataEditor();
-					ge.Handled = true;
-					return;
-				}
-
 				// Let Gecko handle hrefs that are explicitly tagged "javascript"
 				if(anchor.Href.StartsWith("javascript")) //tied to, for example, data-functionOnHintClick="ShowTopicChooser()"
 				{

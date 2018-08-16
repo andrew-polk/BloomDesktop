@@ -1,6 +1,5 @@
 import { BloomApi } from "../utils/bloomApi";
 import * as React from "react";
-import * as ReactDOM from "react-dom";
 import {
     ILocalizationProps,
     ILocalizationState,
@@ -12,6 +11,7 @@ export interface IButtonProps extends ILocalizationProps {
     enabled: boolean;
     clickEndpoint?: string;
     onClick?: () => void;
+    data?: object;
     mightNavigate?: boolean; // true if the post of clickEndpoint might navigate to a new page.
     hasText: boolean; // allows us to define buttons with only images and no text.
     // If neither enabled or disabled image file is provided, no image will show.
@@ -66,6 +66,12 @@ export default class BloomButton extends LocalizableElement<
                         if (this.props.mightNavigate) {
                             BloomApi.postThatMightNavigate(
                                 this.props.clickEndpoint
+                            );
+                        } else if (this.props.data) {
+                            console.log(this.props.data);
+                            BloomApi.postData(
+                                this.props.clickEndpoint,
+                                this.props.data
                             );
                         } else {
                             BloomApi.post(this.props.clickEndpoint);
