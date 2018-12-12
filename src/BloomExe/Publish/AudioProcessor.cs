@@ -9,23 +9,21 @@ using Bloom.Edit;
 using SIL.CommandLineProcessing;
 using SIL.IO;
 using SIL.Progress;
-using SIL.Xml;
 
 namespace Bloom.Publish
 {
 	public class AudioProcessor
 	{
 		// We record as .wav but convert to .mp3 for publication
-		public static readonly string[] NarrationAudioExtensions = { ".wav", ".mp3" };
+		public static readonly string[] NarrationAudioExtensions = {".wav", ".mp3"};
+
+		public static readonly string[] PublishableNarrationAudioExtensions = {".mp3"};
 
 		public static readonly string[] MusicFileExtensions = { ".mp3", ".ogg", ".wav" };
 
 		public static readonly string[] AudioFileExtensions = NarrationAudioExtensions.Union(MusicFileExtensions).ToArray();
 
 		private static LameEncoder _mp3Encoder;
-
-		//extracted so unit test can override
-		public static Func<string, string> _compressorMethod = MakeCompressedAudio;
 
 		/// <summary>
 		/// Compares timestamps on .wav files and .mp3 files to see if we need to update any .mp3 files.
@@ -35,9 +33,6 @@ namespace Bloom.Publish
 		/// </summary>
 		public static bool IsAnyCompressedAudioMissing(string bookFolderPath, XmlDocument dom)
 		{
-			if (!LameEncoder.IsAvailable())
-				return true;
-
 			return !IsTrueForAllAudioSentenceElements(bookFolderPath, dom,
 				(wavpath, mp3path) => !Mp3IsNeeded(wavpath, mp3path));
 		}
@@ -78,7 +73,7 @@ namespace Bloom.Publish
 		private static bool IsTrueForAllAudioSentenceElements(string bookFolderPath, XmlDocument dom, Func<string, string, bool> predicate)
 		{
 			var audioFolderPath = GetAudioFolderPath(bookFolderPath);
-			return Bloom.Book.HtmlDom.SelectAudioSentenceElements(dom.DocumentElement)
+			return Book.HtmlDom.SelectAudioSentenceElements(dom.DocumentElement)
 				.Cast<XmlElement>()
 				.All(span =>
 				{
@@ -95,50 +90,16 @@ namespace Bloom.Publish
 
 		/// <summary>
 		/// Make a compressed audio file for the specified .wav file.
-		/// (Or return null if it can't be done because we don't have a LAME package installed.)
 		/// </summary>
-		/// <param name="id"></param>
-		/// <returns></returns>
-		// internal and virtual for testing.
 		public static string MakeCompressedAudio(string wavPath)
 		{
-			// We have a recording, but not compressed. Possibly the LAME package was installed after
-			// the recordings were made. Compress it now.
 			if(_mp3Encoder == null)
-			{
-				if(!LameEncoder.IsAvailable())
-				{
-					return null;
-				}
 				_mp3Encoder = new LameEncoder();
-			}
-			_mp3Encoder.Encode(wavPath, wavPath.Substring(0, wavPath.Length - 4), new NullProgress());
-			return Path.ChangeExtension(wavPath, "mp3");
+
+			return _mp3Encoder.Encode(wavPath);
 		}
 
-		public static string GetOrCreateCompressedAudioIfWavExists(string bookFolderPath, string recordingSegmentId)
-		{
-			if (String.IsNullOrEmpty(recordingSegmentId))
-			{
-				return null;
-			}
-
-			var root = GetAudioFolderPath(bookFolderPath);
-			var wavPath = Path.Combine(root, Path.ChangeExtension(recordingSegmentId, "wav"));
-			if (!RobustFile.Exists(wavPath))
-				return null; // recording never created or deleted, don't use even if compressed exists.
-			var extensions = new[] {"mp3", "mp4"}; // .ogg,, .wav, ...?
-
-			foreach(var ext in extensions)
-			{
-				var path = Path.Combine(root, Path.ChangeExtension(recordingSegmentId, ext));
-				if(RobustFile.Exists(path))
-					return path;
-			}
-			return _compressorMethod(wavPath);
-		}
-
-		public static bool GetWavOrMp3Exists(string bookFolderPath, string recordingSegmentId)
+		public static bool DoesWavOrMp3Exist(string bookFolderPath, string recordingSegmentId)
 		{
 			if (recordingSegmentId == null)
 			{
@@ -157,30 +118,60 @@ namespace Bloom.Publish
 		}
 
 		/// <summary>
-		/// Merge the specified input wav files into the specified output file. Returns null if successful,
-		/// a string that may be useful in debugging if not.
+		/// Returns a path to the publishable audio file corresponding to the given segment (or null if none exists).
+		/// If there is only a wav file and no mp3 file, the mp3 file is generated on the fly.
 		/// </summary>
-		/// <param name="mergeFiles"></param>
-		/// <param name="combinedAudioPath"></param>
-		/// <returns></returns>
-		public static string MergeAudioFiles(IEnumerable<string> mergeFiles, string combinedAudioPath)
+		public static string GetPublishableAudioPathIfExists(string bookFolderPath, string recordingSegmentId)
 		{
-			string soxPath = "/usr/bin/sox";	// standard Linux location
-			if (SIL.PlatformUtilities.Platform.IsWindows)
-				soxPath = FileLocationUtilities.GetFileDistributedWithApplication("sox/sox.exe");
-			var argsBuilder = new StringBuilder();
-			foreach (var path in mergeFiles)
-				argsBuilder.Append("\"" + path + "\" ");
+			if (recordingSegmentId == null)
+				return null;
 
-			argsBuilder.Append("\"" + combinedAudioPath + "\"");
-			var result = CommandLineRunner.Run(soxPath, argsBuilder.ToString(), "", 60 * 10, new NullProgress());
-			var output = result.StandardError.Contains("FAIL") ? result.StandardError : null;
-			if (output != null)
+			var root = GetAudioFolderPath(bookFolderPath);
+
+			foreach (var ext in PublishableNarrationAudioExtensions)
 			{
-				RobustFile.Delete(combinedAudioPath);
+				var path = Path.Combine(root, Path.ChangeExtension(recordingSegmentId, ext));
+				if (RobustFile.Exists(path))
+					return path;
 			}
 
-			return output;
+			// Some old books could have a wav file without the corresponding mp3 file.
+			// If that is the case, generate the mp3 now and return it.
+			var wavPath = Path.Combine(root, Path.ChangeExtension(recordingSegmentId, "wav"));
+			if (RobustFile.Exists(wavPath))
+				return MakeCompressedAudio(wavPath);
+
+			return null;
+		}
+
+		/// <summary>
+		/// Merge the specified input files into the specified output file. Returns null if successful,
+		/// a string that may be useful in debugging if not.
+		/// </summary>
+		public static string MergeAudioFiles(IEnumerable<string> mergeFiles, string combinedAudioPath)
+		{
+			var ffmpeg = "/usr/bin/ffmpeg"; // standard Linux location
+			if (SIL.PlatformUtilities.Platform.IsWindows)
+				ffmpeg = Path.Combine(BloomFileLocator.GetCodeBaseFolder(), "ffmpeg.exe");
+			if (RobustFile.Exists(ffmpeg))
+			{
+				var argsBuilder = new StringBuilder("-i \"concat:");
+				foreach (var path in mergeFiles)
+					argsBuilder.Append(path + "|");
+				argsBuilder.Length--;
+
+				argsBuilder.Append($"\" -c copy \"{combinedAudioPath}\"");
+				var result = CommandLineRunner.Run(ffmpeg, argsBuilder.ToString(), "", 60 * 10, new NullProgress());
+				var output = result.ExitCode != 0 ? result.StandardError : null;
+				if (output != null)
+				{
+					RobustFile.Delete(combinedAudioPath);
+				}
+
+				return output;
+			}
+
+			return "Could not find ffmpeg";
 		}
 
 		public static bool HasAudioFileExtension(string fileName)

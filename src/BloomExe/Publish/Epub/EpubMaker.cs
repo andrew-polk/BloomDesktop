@@ -10,7 +10,6 @@ using System.Web;
 using System.Windows.Forms;
 using System.Xml;
 using System.Xml.Linq;
-using Bloom.Api;
 using Bloom.Book;
 using Bloom.ToPalaso;
 using Bloom.web;
@@ -598,7 +597,7 @@ namespace Bloom.Publish.Epub
 			// Now check if the audio recordings actually exist for them
 			var audioSentenceElementsWithRecordedAudio =
 				audioSentenceElements.Where(
-					x => AudioProcessor.GetOrCreateCompressedAudioIfWavExists(Storage.FolderPath, x.Attributes["id"].Value) != null);
+					x => AudioProcessor.GetPublishableAudioPathIfExists(Storage.FolderPath, x.Attributes["id"].Value) != null);
 			if(!audioSentenceElementsWithRecordedAudio.Any())
 				return;
 			var overlayName = GetOverlayName(pageDocName);
@@ -625,7 +624,7 @@ namespace Bloom.Publish.Epub
 			foreach(var audioSentenceElement in audioSentenceElementsWithRecordedAudio)
 			{
 				var audioId = audioSentenceElement.Attributes["id"].Value;
-				var path = AudioProcessor.GetOrCreateCompressedAudioIfWavExists(Storage.FolderPath, audioId);
+				var path = AudioProcessor.GetPublishableAudioPathIfExists(Storage.FolderPath, audioId);
 				var dataDurationAttr = audioSentenceElement.Attributes["data-duration"];
 				TimeSpan clipTimeSpan;
 				if(dataDurationAttr != null)
@@ -636,36 +635,33 @@ namespace Bloom.Publish.Epub
 				}
 				else
 				{
-					//var durationSeconds = TagLib.File.Create(path).Properties.Duration.TotalSeconds;
-					//duration += new TimeSpan((long)(durationSeconds * 1.0e7)); // argument is in ticks (100ns)
-					// Haven't found a good way to get duration from MP3 without adding more windows-specific
-					// libraries. So for now we'll figure it from the wav if we have it. If not we do a very
-					// crude estimate from file size. Hopefully good enough for BSV animation.
-					var wavPath = Path.ChangeExtension(path, "wav");
-					if(RobustFile.Exists(wavPath))
+					try
 					{
 #if __MonoCS__
+						// ffmpeg can provide the length of the audio, but you have to strip it out of the command line output
+						// See https://stackoverflow.com/a/33115316/7442826 or https://stackoverflow.com/a/53648234/7442826
+
 						// /usr/bin/soxi -D file.(mp3|wav) returns the time in seconds to stdout
 						// or /usr/bin/sox --info -D file.(mp3|wav)  [soxi is a symbolic link to sox on Linux]
 						clipTimeSpan = new TimeSpan(new FileInfo(path).Length*7*10000000/61000);	// TODO: this needs to be fixed for Linux/Mono
 #else
-						using(WaveFileReader wf = RobustIO.CreateWaveFileReader(wavPath))
-							clipTimeSpan = wf.TotalTime;
+						using (var reader = new Mp3FileReader(path))
+							clipTimeSpan = reader.TotalTime;
 #endif
 					}
-					else
+					catch
 					{
 						NonFatalProblem.Report(ModalIf.All, PassiveIf.All,
-							"Bloom could not find one of the expected audio files for this book, nor a precomputed duration. Bloom can only make a very rough estimate of the length of the mp3 file.");
+							"Bloom could not accurately determine the length of the audio file and will only make a very rough estimate.");
 						// Crude estimate. In one sample, a 61K mp3 is 7s long.
 						// So, multiply by 7 and divide by 61K to get seconds.
 						// Then, to make a TimeSpan we need ticks, which are 0.1 microseconds,
 						// hence the 10000000.
-						clipTimeSpan = new TimeSpan(new FileInfo(path).Length*7*10000000/61000);
+						clipTimeSpan = new TimeSpan(new FileInfo(path).Length * 7 * 10000000 / 61000);
 					}
 				}
 
-				var clipStart = pageDuration;	
+				var clipStart = pageDuration;
 				pageDuration += clipTimeSpan;
 				string epubPath = mergedAudioPath ?? CopyFileToEpub(path, subfolder:kAudioFolder);
 				var newSrc = epubPath.Substring(_contentFolder.Length+1).Replace('\\','/');
@@ -693,21 +689,17 @@ namespace Bloom.Publish.Epub
 		/// <returns></returns>
 		private string MergeAudioElements(IEnumerable<XmlElement> elementsWithAudio)
 		{
-			string mergedAudioPath = null;
-			var mergeFiles =
+			 var mergeFiles =
 				elementsWithAudio.Select(
-					s => Path.ChangeExtension(
-						AudioProcessor.GetOrCreateCompressedAudioIfWavExists(Storage.FolderPath, s.Attributes["id"]?.Value), "wav"))
-				.Where(s => !String.IsNullOrEmpty(s));
+					s => AudioProcessor.GetPublishableAudioPathIfExists(Storage.FolderPath, s.Attributes["id"]?.Value))
+				.Where(s => !string.IsNullOrEmpty(s));
 			Directory.CreateDirectory(Path.Combine(_contentFolder, kAudioFolder));
-			var combinedAudioPath = Path.Combine(_contentFolder, kAudioFolder, "page" + _pageIndex + ".wav");
+			var combinedAudioPath = Path.Combine(_contentFolder, kAudioFolder, "page" + _pageIndex + ".mp3");
 			var errorMessage = AudioProcessor.MergeAudioFiles(mergeFiles, combinedAudioPath);
 			if (errorMessage == null)
 			{
-				mergedAudioPath = AudioProcessor.MakeCompressedAudio(combinedAudioPath);
-				RobustFile.Delete(combinedAudioPath);
-				_manifestItems.Add(kAudioFolder+"/" + Path.GetFileName(mergedAudioPath));
-				return mergedAudioPath;
+				_manifestItems.Add(kAudioFolder+"/" + Path.GetFileName(combinedAudioPath));
+				return combinedAudioPath;
 			}
 			Logger.WriteEvent("Failed to merge audio files for page " + _pageIndex + " " + errorMessage);
 			// and we will do it the old way. Works for some readers.
@@ -2345,35 +2337,37 @@ namespace Bloom.Publish.Epub
 				extension = extension.Substring(1);	// ignore the .
 			switch (extension.ToLowerInvariant())
 			{
-			case "xml": // Review
-			case "xhtml":
-				return "application/xhtml+xml";
-			case "jpg":
-			case "jpeg":
-				return "image/jpeg";
-			case "png":
-				return "image/png";
-			case "svg":
-				return "image/svg+xml";     // https://www.w3.org/TR/SVG/intro.html
-			case "css":
-				return "text/css";
-			case "woff":
-				return "application/font-woff"; // http://stackoverflow.com/questions/2871655/proper-mime-type-for-fonts
-			case "ttf":
-			case "otf":
-				// According to http://stackoverflow.com/questions/2871655/proper-mime-type-for-fonts, the proper
-				// mime type for ttf fonts is now application/font-sfnt. However, this fails the Pagina Epubcheck
-				// for epub 3.0.1, since the proper mime type for ttf was not put into the epub standard until 3.1.
-				// See https://github.com/idpf/epub-revision/issues/443 and http://www.idpf.org/epub/31/spec/epub-changes.html#sec-epub31-cmt.
-				// Since there are no plans to deprecate application/vnd.ms-opentype and it's unlikely to break
-				// any reader (unlikely the reader even uses the type field), we're just sticking with that.
-				return "application/vnd.ms-opentype"; // http://stackoverflow.com/questions/2871655/proper-mime-type-for-fonts
-			case "smil":
-				return "application/smil+xml";
-			case "mp4":
-				return "audio/mp4";
-			case "mp3":
-				return "audio/mpeg";
+				case "xml": // Review
+				case "xhtml":
+					return "application/xhtml+xml";
+				case "jpg":
+				case "jpeg":
+					return "image/jpeg";
+				case "png":
+					return "image/png";
+				case "svg":
+					return "image/svg+xml"; // https://www.w3.org/TR/SVG/intro.html
+				case "css":
+					return "text/css";
+				case "woff":
+					return "application/font-woff"; // http://stackoverflow.com/questions/2871655/proper-mime-type-for-fonts
+				case "ttf":
+				case "otf":
+					// According to http://stackoverflow.com/questions/2871655/proper-mime-type-for-fonts, the proper
+					// mime type for ttf fonts is now application/font-sfnt. However, this fails the Pagina Epubcheck
+					// for epub 3.0.1, since the proper mime type for ttf was not put into the epub standard until 3.1.
+					// See https://github.com/idpf/epub-revision/issues/443 and http://www.idpf.org/epub/31/spec/epub-changes.html#sec-epub31-cmt.
+					// Since there are no plans to deprecate application/vnd.ms-opentype and it's unlikely to break
+					// any reader (unlikely the reader even uses the type field), we're just sticking with that.
+					return "application/vnd.ms-opentype"; // http://stackoverflow.com/questions/2871655/proper-mime-type-for-fonts
+				case "smil":
+					return "application/smil+xml";
+				// REVIEW: Our mp4 containers are for video; but epub 3 doesn't have media types for video.
+				// I started to remove this when we removed the vestiges of old audio mp4 code, but video unit tests fail without it.
+				case "mp4":
+					return "audio/mp4";
+				case "mp3":
+					return "audio/mpeg";
 			}
 			throw new ApplicationException ("unexpected/nonexistent file type in file " + item);
 		}
@@ -2401,14 +2395,6 @@ namespace Bloom.Publish.Epub
 		{
 			if (_outerStagingFolder != null)
 				_outerStagingFolder.Dispose ();
-		}
-
-		public bool ReadyToSave ()
-		{
-			// The same files have already been copied over to the staging area, but if we compare timestamps on the copied files
-			// the comparison is unreliable (.wav files are larger and take longer to copy than the corresponding .mp3 files).
-			// So we compare the original book's audio files to determine if any are missing -- BL-5437
-			return PublishWithoutAudio || !AudioProcessor.IsAnyCompressedAudioMissing (_originalBook?.FolderPath, Book.RawDom);
 		}
 	}
 }
